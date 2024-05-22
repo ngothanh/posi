@@ -1,2 +1,2 @@
 # posi
-Rate limit implements in Golang. Posi is like police siren
+Rate limit implements in Rust. Posi is like police siren
