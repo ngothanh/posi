@@ -151,4 +151,20 @@ mod tests {
         thread::sleep(Duration::from_secs(5));
         assert_eq!(rate_limiter.try_acquire(5), true);
     }
+
+    #[test]
+    fn given_fixed_window_rate_limiter_then_it_has_problems_at_window_interchanged() {
+        //given
+        let rate = Rate {
+            permit_num: 5,
+            duration: Duration::from_secs(3),
+        };
+        let rate_limiter = FixedWindowRateLimiter::new(rate);
+        thread::sleep(Duration::from_secs(2));
+
+        //then
+        assert_eq!(rate_limiter.try_acquire(5), true);
+        thread::sleep(Duration::from_secs(1));
+        assert_eq!(rate_limiter.try_acquire(5), true);
+    }
 }
