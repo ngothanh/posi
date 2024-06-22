@@ -104,7 +104,8 @@ pub struct Rate {
 enum RateLimiterType {
     TokenBucket,
     FixedWindow,
-    SlidingWindow,
+    SlidingWindowLog,
+    SlidingWindowCounter,
 }
 
 #[cfg(test)]
