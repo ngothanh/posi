@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::log_storage::LogStorage;
 use crate::scheduler::Scheduler;
 
 trait RateLimiter {
@@ -19,10 +20,31 @@ struct FixedWindowRateLimiter {
     window_start: Arc<Mutex<Instant>>,
 }
 
+struct SlidingWindowLogRateLimiter {
+    rate: Rate,
+    log_storage: Arc<Mutex<Box<dyn LogStorage + Send>>>,
+}
+
+impl SlidingWindowLogRateLimiter {
+    pub fn new(rate: Rate, log_storage: Box<dyn LogStorage + Send>) -> SlidingWindowLogRateLimiter {
+        SlidingWindowLogRateLimiter {
+            rate,
+            log_storage: Arc::new(Mutex::new(log_storage)),
+        }
+    }
+}
+
+impl RateLimiter for SlidingWindowLogRateLimiter {
+    fn try_acquire(&self, permits: usize) -> bool {
+        let mut storage = self.log_storage.lock().unwrap();
+        storage.store(permits, self.rate.duration);
+        let count = storage.count();
+        return count <= self.rate.permit_num;
+    }
+}
 
 impl FixedWindowRateLimiter {
     pub fn new(rate: Rate) -> FixedWindowRateLimiter {
-        let permit_num = rate.permit_num;
         FixedWindowRateLimiter {
             rate,
             counter: Arc::new(Mutex::new(0)),
@@ -113,7 +135,8 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::rate_limiter::{FixedWindowRateLimiter, Rate, RateLimiter, TokenBucketRateLimiter};
+    use crate::log_storage::InMemoryLogStorage;
+    use crate::rate_limiter::{FixedWindowRateLimiter, Rate, RateLimiter, SlidingWindowLogRateLimiter, TokenBucketRateLimiter};
 
     #[test]
     fn give_token_bucket_rate_limiter_then_it_protects_the_resource_correctly() {
@@ -166,6 +189,22 @@ mod tests {
         //then
         assert_eq!(rate_limiter.try_acquire(5), true);
         thread::sleep(Duration::from_secs(1));
+        assert_eq!(rate_limiter.try_acquire(5), true);
+    }
+
+    #[test]
+    fn given_sliding_window_log_rate_limiter_then_it_protects_the_resource_correctly() {
+        //given
+        let rate = Rate {
+            permit_num: 5,
+            duration: Duration::from_secs(3),
+        };
+        let storage = InMemoryLogStorage::new(rate.permit_num + 1, rate.duration);
+        let rate_limiter = SlidingWindowLogRateLimiter::new(rate, Box::new(storage));
+
+        //then
+        assert_eq!(rate_limiter.try_acquire(5), true);
+        thread::sleep(Duration::from_secs(3));
         assert_eq!(rate_limiter.try_acquire(5), true);
     }
 }
