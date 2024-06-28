@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -6,6 +7,31 @@ use crate::scheduler::Scheduler;
 
 trait RateLimiter {
     fn try_acquire(&self, permits: usize) -> bool;
+
+    fn get_type(&self) -> RateLimiterType;
+}
+
+struct RateLimiterFactory {
+    rate_limiters: HashMap<RateLimiterType, Box<dyn RateLimiter>>,
+}
+
+impl RateLimiterFactory {
+    fn new(rate_limiters: Vec<Box<dyn RateLimiter>>) -> Box<RateLimiterFactory> {
+        let mut res: HashMap<RateLimiterType, Box<dyn RateLimiter>> = HashMap::new();
+        for rate_limiter in rate_limiters {
+            res.insert(rate_limiter.get_type(), rate_limiter);
+        }
+
+        Box::new(
+            RateLimiterFactory {
+                rate_limiters: res
+            }
+        )
+    }
+
+    fn get(&self, t: RateLimiterType) -> Option<&Box<dyn RateLimiter>> {
+        self.rate_limiters.get(&t)
+    }
 }
 
 struct TokenBucketRateLimiter {
@@ -36,10 +62,14 @@ impl SlidingWindowLogRateLimiter {
 
 impl RateLimiter for SlidingWindowLogRateLimiter {
     fn try_acquire(&self, permits: usize) -> bool {
-        let mut storage = self.log_storage.lock().unwrap();
+        let storage = self.log_storage.lock().unwrap();
         storage.store(permits, self.rate.duration);
         let count = storage.count();
         return count <= self.rate.permit_num;
+    }
+
+    fn get_type(&self) -> RateLimiterType {
+        RateLimiterType::SlidingWindowLog
     }
 }
 
@@ -79,6 +109,10 @@ impl RateLimiter for FixedWindowRateLimiter {
         *cur_counter += permits;
         true
     }
+
+    fn get_type(&self) -> RateLimiterType {
+        RateLimiterType::FixedWindow
+    }
 }
 
 impl TokenBucketRateLimiter {
@@ -115,6 +149,10 @@ impl RateLimiter for TokenBucketRateLimiter {
             true
         }
     }
+
+    fn get_type(&self) -> RateLimiterType {
+        RateLimiterType::TokenBucket
+    }
 }
 
 #[derive(Clone)]
@@ -123,10 +161,11 @@ pub struct Rate {
     duration: Duration,
 }
 
+#[derive(Eq, Hash, PartialEq)]
 enum RateLimiterType {
     TokenBucket,
     FixedWindow,
-    SlidingWindowLog
+    SlidingWindowLog,
 }
 
 #[cfg(test)]
@@ -135,7 +174,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::log_storage::InMemoryLogStorage;
-    use crate::rate_limiter::{FixedWindowRateLimiter, Rate, RateLimiter, SlidingWindowLogRateLimiter, TokenBucketRateLimiter};
+    use crate::rate_limiter::{FixedWindowRateLimiter, Rate, RateLimiter, RateLimiterFactory, RateLimiterType, SlidingWindowLogRateLimiter, TokenBucketRateLimiter};
 
     #[test]
     fn give_token_bucket_rate_limiter_then_it_protects_the_resource_correctly() {
@@ -202,6 +241,34 @@ mod tests {
         let rate_limiter = SlidingWindowLogRateLimiter::new(rate, Box::new(storage));
 
         //then
+        assert_eq!(rate_limiter.try_acquire(5), true);
+        thread::sleep(Duration::from_secs(3));
+        assert_eq!(rate_limiter.try_acquire(5), true);
+    }
+
+    #[test]
+    fn get_sliding_window_log_rate_limiter_via_factory_then_it_protects_the_resource_correctly() {
+        //given
+        let rate = Rate {
+            permit_num: 5,
+            duration: Duration::from_secs(3),
+        };
+        let log_size = rate.permit_num + 1;
+        let duration = rate.duration.clone();
+        let storage = InMemoryLogStorage::new(log_size, duration);
+        let sliding_window_log_rate_limiter: Box<dyn RateLimiter> = Box::new(SlidingWindowLogRateLimiter::new(rate.clone(), Box::new(storage)));
+        let fix_window_rate_limiter: Box<dyn RateLimiter> = Box::new(FixedWindowRateLimiter::new(rate.clone()));
+        let token_bucket_rate_limiter: Box<dyn RateLimiter> = Box::new(TokenBucketRateLimiter::new(rate.clone()));
+        let rate_limiters = vec![
+            sliding_window_log_rate_limiter,
+            fix_window_rate_limiter,
+            token_bucket_rate_limiter,
+        ];
+
+        let factory = RateLimiterFactory::new(rate_limiters);
+
+        //then
+        let rate_limiter = factory.get(RateLimiterType::SlidingWindowLog).unwrap();
         assert_eq!(rate_limiter.try_acquire(5), true);
         thread::sleep(Duration::from_secs(3));
         assert_eq!(rate_limiter.try_acquire(5), true);
