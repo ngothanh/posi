@@ -7,3 +7,4 @@ edition = "2021"
 moka = { version = "0.12.7", features = ["sync"] }
 uuid = "1.9.1"
 log = "0.4.22"
+redis = "0.25.4"
